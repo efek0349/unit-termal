@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "ThermalScope"
-APP_VERSION = "1.0.0"
+APP_VERSION = "1.0.1"
 APP_AUTHOR = "efek"
 GITHUB_URL = "https://github.com/efek0349"
 TELEGRAM_URL = "https://t.me/efek0349"
@@ -663,6 +663,57 @@ class AutoGain:
 # widgets
 # ----------------------------------------------------------------------------
 
+class PanelHandle(QWidget):
+    """Panel kenarında duran ince '<' / '>' tutamağı — tıklayınca paneli gizler/gösterir."""
+
+    clicked = Signal()
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setFixedSize(16, 64)
+        self.setCursor(Qt.PointingHandCursor)
+        self.setToolTip("Ayarlar panelini gizle")
+        self._arrow_left = True   # True: '<' (panel açık), False: '>' (panel kapalı)
+        self._hover = False
+        self.setAttribute(Qt.WA_Hover, True)
+
+    def set_arrow_left(self, left: bool) -> None:
+        self._arrow_left = left
+        self.setToolTip("Ayarlar panelini gizle" if left else "Ayarlar panelini göster")
+        self.update()
+
+    def enterEvent(self, event) -> None:  # noqa: N802
+        self._hover = True
+        self.update()
+
+    def leaveEvent(self, event) -> None:  # noqa: N802
+        self._hover = False
+        self.update()
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self.clicked.emit()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+
+        bg = QColor(40, 40, 50, 220) if self._hover else QColor(28, 28, 36, 200)
+        border = QColor(127, 140, 255) if self._hover else QColor(74, 74, 90)
+        painter.setBrush(bg)
+        painter.setPen(QPen(border, 1))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 5, 5)
+
+        painter.setPen(QPen(QColor(230, 230, 240), 2))
+        cx, cy = self.width() // 2, self.height() // 2
+        d = 4
+        if self._arrow_left:
+            pts = [QPoint(cx + d // 2, cy - d), QPoint(cx - d // 2, cy), QPoint(cx + d // 2, cy + d)]
+        else:
+            pts = [QPoint(cx - d // 2, cy - d), QPoint(cx + d // 2, cy), QPoint(cx - d // 2, cy + d)]
+        painter.drawPolyline(pts)
+
+
 class ThermalView(QWidget):
     """Renders the thermal image, colour bar overlays and the spot cursor."""
 
@@ -738,6 +789,8 @@ class ThermalView(QWidget):
             painter.setPen(QColor(140, 140, 140))
             painter.drawText(self.rect(), Qt.AlignCenter,
                              "Kamera bekleniyor…\n\nBaşlat düğmesine basın")
+            for child in self.findChildren(PanelHandle):
+                child.raise_()
             return
 
         rect = self._image_rect()
@@ -798,6 +851,10 @@ class ThermalView(QWidget):
             painter.fillRect(QRect(8, self.height() - th - 10, tw, th), QColor(0, 0, 0, 150))
             painter.setPen(QColor(210, 210, 210))
             painter.drawText(QRect(13, self.height() - th - 10, tw, th), Qt.AlignLeft | Qt.AlignVCenter, self._mode_text)
+
+        # --- tutamak her zaman üstte olsun ---
+        for child in self.findChildren(PanelHandle):
+            child.raise_()
 
 
 # ----------------------------------------------------------------------------
@@ -1002,6 +1059,11 @@ class MainWindow(QMainWindow):
         self.spot: tuple[int, int] | None = None
         self._ema: np.ndarray | None = None
         self.nuc: np.ndarray | None = self._load_nuc()
+
+        # panel gizle/göster durumu
+        self._panel_visible = True
+        self._saved_panel_width = 338
+        self._saved_window_size = None
 
         self._build_ui()
 
@@ -1303,18 +1365,25 @@ class MainWindow(QMainWindow):
         panel.addWidget(self.status)
         panel.addStretch(1)   # içerik üstte toplansın, arada boşluk oluşmasın
 
-        scroll = QScrollArea()
-        scroll.setWidget(right)
-        scroll.setWidgetResizable(True)
-        scroll.setFixedWidth(338)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        stage_row.addWidget(scroll)
+        self.panel_scroll = QScrollArea()
+        self.panel_scroll.setWidget(right)
+        self.panel_scroll.setWidgetResizable(True)
+        self.panel_scroll.setFixedWidth(338)
+        self.panel_scroll.setFrameShape(QFrame.NoFrame)
+        self.panel_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        stage_row.addWidget(self.panel_scroll)
+
+        # --- panel kenarındaki '<' / '>' tutamağı (görüntünün çocuğu) ---
+        self.panel_handle = PanelHandle(self.view)
+        self.panel_handle.clicked.connect(self.toggle_panel)
+        self.panel_handle.set_arrow_left(True)
+        self.panel_handle.show()
+        QTimer.singleShot(0, self._position_panel_handle)
 
         # --- alt bilgi çubuğu (her zaman görünür) ---
-        footer = QWidget()
-        footer.setStyleSheet("background:#17171c;")
-        frow = QHBoxLayout(footer)
+        self.footer = QWidget()
+        self.footer.setStyleSheet("background:#17171c;")
+        frow = QHBoxLayout(self.footer)
         frow.setContentsMargins(12, 5, 12, 5)
         frow.setSpacing(8)
 
@@ -1337,9 +1406,67 @@ class MainWindow(QMainWindow):
         )
         about_btn.clicked.connect(lambda: AboutDialog(self).exec())
         frow.addWidget(about_btn)
-        root.addWidget(footer)
+        root.addWidget(self.footer)
 
         self.setCentralWidget(central)
+
+    # -- panel gizle/göster --------------------------------------------
+    def _position_panel_handle(self) -> None:
+        """Tutamağı görüntü alanının sağ kenarına, üst tarafta konumlandırır."""
+        if not hasattr(self, "panel_handle"):
+            return
+        margin_top = 10
+        x = self.view.width() - self.panel_handle.width() - (2 if self._panel_visible else 8)
+        y = margin_top
+        self.panel_handle.move(max(0, x), y)
+        self.panel_handle.raise_()
+
+    def toggle_panel(self) -> None:
+        """Sağ ayarlar panelini gizle/göster - minimal termal görüntü modu.
+
+        Panel gizlenince:
+          * pencere panel genişliği kadar KÜÇÜLÜR,
+          * alt bilgi çubuğu (footer) gizlenir,
+          * başlık çubuğu ve pencere kenarları KORUNUR
+            (kapat / simge durumuna al / büyüt düğmeleri + yeniden boyutlandırma çalışır).
+        Panel açılınca her şey eski hâline döner.
+        """
+        if self._panel_visible:
+            # --- paneli kapat: temiz görünüm (çerçeve korunur) ---
+            panel_width = self.panel_scroll.width() or self._saved_panel_width
+            self._saved_panel_width = panel_width
+            self._saved_window_size = self.size()
+
+            # pencereyi panel genişliği kadar daralt
+            new_w = max(self.minimumWidth(), self.width() - panel_width)
+            self.resize(new_w, self.height())
+
+            self.panel_scroll.setVisible(False)
+            self.footer.setVisible(False)
+            self.panel_handle.set_arrow_left(False)
+            self._panel_visible = False
+        else:
+            # --- paneli aç: normal görünüm ---
+            self._panel_visible = True
+
+            self.panel_scroll.setVisible(True)
+            self.panel_scroll.setFixedWidth(self._saved_panel_width)
+            self.footer.setVisible(True)
+            self.panel_handle.set_arrow_left(True)
+
+            # pencereyi eski boyutuna getir
+            if self._saved_window_size is not None:
+                self.resize(self._saved_window_size.width(), self._saved_window_size.height())
+            else:
+                self.resize(self.width() + self._saved_panel_width, self.height())
+
+        QTimer.singleShot(0, self._position_panel_handle)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._panel_visible:
+            self._saved_window_size = self.size()
+        self._position_panel_handle()
 
     # -- capture --------------------------------------------------------
     def refresh_devices(self) -> None:
@@ -1683,6 +1810,8 @@ class MainWindow(QMainWindow):
         elif event.key() == Qt.Key_V:
             self.mirror_v_btn.toggle()
             self.on_orientation_toggle()
+        elif event.key() == Qt.Key_P:
+            self.toggle_panel()
         elif event.key() == Qt.Key_Escape:
             self.close()
         else:
