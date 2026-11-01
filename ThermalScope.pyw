@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ThermalScope - UNI-T / Guide termal kamera goruntuleyici (Windows)
+ThermalScope - UNI-T / Guide termal kamera goruntuleyici (Windows / Linux)
 
 Mobil "Thermal Mobile" uygulamasinin yaptigini PC'de yapar:
   * UVC kamerasinin 256x384 YUY2 akisini acar (Windows Kamera uygulamasinin
@@ -9,7 +9,7 @@ Mobil "Thermal Mobile" uygulamasinin yaptigini PC'de yapar:
   * imlec/maks/min/merkez/ortalama sicakliklarini gosterir,
   * kalibrasyon ve fotograf kaydetme sunar.
 
-Veri yolu: ffmpeg (DirectShow) -> raw YUY2 -> numpy -> QImage.
+Veri yolu: ffmpeg (Windows: DirectShow, Linux: V4L2) -> raw YUY2 -> numpy -> QImage.
 
 Temiz mod (panel gizli): pencere termal goruntunun en-boy oranina kilitlenir.
 Windows'ta WM_SIZING ile surukleme sirasinda oran korunur; kenardan cekince
@@ -23,9 +23,12 @@ import base64
 import ctypes
 import json
 import os
+import queue
 import re
+import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass, asdict
@@ -48,14 +51,43 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "ThermalScope"
-APP_VERSION = "1.0.3"
+APP_VERSION = "1.0.4"
 APP_AUTHOR = "efek0349"
 GITHUB_URL = "https://github.com/efek0349"
 TELEGRAM_URL = "https://t.me/efek0349"
 GPG_KEY = "0x2BE4D2A863E2EAB4"
 BASE_DIR = Path(__file__).resolve().parent
 PALETTE_DIR = BASE_DIR / "palettes"
-SETTINGS_DIR = Path(os.environ.get("APPDATA", str(Path.home()))) / "ThermalScope"
+IS_WIN = os.name == "nt"
+UI_FONT = "Segoe UI" if IS_WIN else "Sans Serif"
+
+
+def _config_dir() -> Path:
+    if IS_WIN:
+        return Path(os.environ.get("APPDATA", str(Path.home()))) / "ThermalScope"
+    base = os.environ.get("XDG_CONFIG_HOME") or str(Path.home() / ".config")
+    return Path(base) / "ThermalScope"
+
+
+SETTINGS_DIR = _config_dir()
+
+
+def user_dir(kind: str, fallback: str) -> Path:
+    """Çıktı klasörü. Linux'ta XDG kullanıcı klasörlerine uyar (Türkçede 'Videolar', 'Resimler').
+    kind: 'VIDEOS' | 'PICTURES'."""
+    home = Path.home()
+    if not IS_WIN:
+        cfg = Path(os.environ.get("XDG_CONFIG_HOME") or (home / ".config")) / "user-dirs.dirs"
+        try:
+            for line in cfg.read_text(encoding="utf-8", errors="ignore").splitlines():
+                line = line.strip()
+                if line.startswith(f"XDG_{kind}_DIR="):
+                    val = line.split("=", 1)[1].strip().strip('"').replace("$HOME", str(home))
+                    if val and Path(val) != home:       # tanımsızsa XDG $HOME'a işaret eder
+                        return Path(val)
+        except OSError:
+            pass
+    return home / fallback
 SETTINGS_FILE = SETTINGS_DIR / "settings.json"
 
 WM_SIZING = 0x0214
@@ -266,7 +298,7 @@ def app_icon() -> QIcon:
 
 
 def materialize_icon_file() -> Path:
-    """Kısayolun kullanabilmesi için ikonu %APPDATA% altına yazar."""
+    """Kısayolun kullanabilmesi için ikonu ayar klasörüne yazar (Windows: %APPDATA%, Linux: ~/.config)."""
     target = SETTINGS_DIR / "ThermalScope.png"
     try:
         if not target.exists() or target.stat().st_size < 1000:
@@ -274,6 +306,31 @@ def materialize_icon_file() -> Path:
             make_icon_pixmap().save(str(target), "PNG")
     except Exception:
         pass
+    return target
+
+
+def install_desktop_entry() -> Path:
+    """Linux: uygulama menüsü girdisi (~/.local/share/applications/thermalscope.desktop)."""
+    icon = materialize_icon_file()
+    base = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    apps = Path(base) / "applications"
+    apps.mkdir(parents=True, exist_ok=True)
+    target = apps / "thermalscope.desktop"
+    script = Path(__file__).resolve()
+    target.write_text(
+        "[Desktop Entry]\n"
+        "Type=Application\n"
+        f"Name={APP_NAME}\n"
+        "Comment=UNI-T / Guide termal kamera görüntüleyici\n"
+        f'Exec="{sys.executable}" "{script}"\n'
+        f"Path={script.parent}\n"
+        f"Icon={icon}\n"
+        "Terminal=false\n"
+        "Categories=Graphics;Video;Utility;\n"
+        f"StartupWMClass={APP_NAME}\n",
+        encoding="utf-8",
+    )
+    target.chmod(0o755)
     return target
 
 
@@ -400,18 +457,24 @@ def _no_window_flags() -> int:
 
 
 def find_ffmpeg(configured: str = "") -> str | None:
-    exe = "ffmpeg.exe" if os.name == "nt" else "ffmpeg"
+    exe = "ffmpeg.exe" if IS_WIN else "ffmpeg"
     candidates: list[str] = []
     if configured:
         candidates.append(configured)
+    found = shutil.which("ffmpeg")
+    if found:
+        candidates.append(found)
     for part in os.environ.get("PATH", "").split(os.pathsep):
         if part:
             candidates.append(str(Path(part) / exe))
     candidates.append(str(BASE_DIR / exe))
-    local = os.environ.get("LOCALAPPDATA", "")
-    if local:
-        candidates.append(str(Path(local) / "Microsoft" / "WinGet" / "Links" / exe))
-    candidates.append(r"C:\ffmpeg\bin\ffmpeg.exe")
+    if IS_WIN:
+        local = os.environ.get("LOCALAPPDATA", "")
+        if local:
+            candidates.append(str(Path(local) / "Microsoft" / "WinGet" / "Links" / exe))
+        candidates.append(r"C:\ffmpeg\bin\ffmpeg.exe")
+    else:
+        candidates += ["/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg", "/snap/bin/ffmpeg"]
     for c in candidates:
         try:
             if Path(c).is_file():
@@ -421,7 +484,7 @@ def find_ffmpeg(configured: str = "") -> str | None:
     return None
 
 
-def list_devices(ffmpeg: str) -> list[str]:
+def _list_dshow_devices(ffmpeg: str) -> list[str]:
     args = [ffmpeg, "-hide_banner", "-list_devices", "true", "-f", "dshow", "-i", "dummy"]
     try:
         res = subprocess.run(
@@ -449,6 +512,84 @@ def list_devices(ffmpeg: str) -> list[str]:
     return names
 
 
+def list_v4l2_devices(sys_root: Path = Path("/sys/class/video4linux"),
+                      dev_root: Path = Path("/dev")) -> list[str]:
+    """Linux: V4L2 görüntü yakalama düğümleri -> 'Ad (/dev/videoN)'."""
+    def num(p: Path) -> int:
+        digits = re.sub(r"\D", "", p.name)
+        return int(digits) if digits else 0
+
+    out: list[str] = []
+    try:
+        nodes = sorted((n for n in sys_root.iterdir() if n.name.startswith("video")), key=num)
+    except OSError:
+        nodes = []
+
+    for node in nodes:
+        try:                                  # index 0 = asıl görüntü düğümü (diğerleri metadata)
+            if (node / "index").read_text().strip() != "0":
+                continue
+        except OSError:
+            pass
+        try:                                  # V4L2_CAP_VIDEO_CAPTURE biti
+            if not int((node / "device_caps").read_text().strip(), 16) & 0x1:
+                continue
+        except (OSError, ValueError):
+            pass
+        try:
+            name = (node / "name").read_text(errors="replace").strip() or node.name
+        except OSError:
+            name = node.name
+        out.append(f"{name} ({dev_root / node.name})")
+
+    if not out:                               # sysfs okunamazsa /dev/video* ile dene
+        try:
+            for dev in sorted(dev_root.glob("video*"), key=num):
+                out.append(f"{dev.name} ({dev})")
+        except OSError:
+            pass
+    return out
+
+
+def v4l2_path(device: str) -> str:
+    m = re.search(r"\((/dev/[^)]+)\)\s*$", device)
+    return m.group(1) if m else device
+
+
+def list_devices(ffmpeg: str) -> list[str]:
+    return _list_dshow_devices(ffmpeg) if IS_WIN else list_v4l2_devices()
+
+
+def ffmpeg_missing_hint() -> str:
+    if IS_WIN:
+        return "ffmpeg kurun (winget install Gyan.FFmpeg) veya ayarlarda yolunu belirtin."
+    return ("ffmpeg kurun (Debian/Ubuntu: sudo apt install ffmpeg, Fedora: sudo dnf install ffmpeg, "
+            "Arch: sudo pacman -S ffmpeg).")
+
+
+def build_capture_args(ffmpeg: str, device: str) -> list[str]:
+    size = f"{STREAM_W}x{STREAM_H}"
+    if IS_WIN:
+        src = [
+            "-f", "dshow", "-rtbufsize", "256M",
+            "-video_size", size, "-framerate", "25",
+            "-i", f"video={device}",
+        ]
+    else:
+        # V4L2: ham YUY2'yi dönüştürmeden iste (radyometrik veri bozulmasın)
+        src = [
+            "-f", "v4l2", "-input_format", "yuyv422",
+            "-video_size", size,
+            "-i", v4l2_path(device),
+        ]
+    return [
+        ffmpeg, "-hide_banner", "-loglevel", "error",
+        "-fflags", "nobuffer", "-flags", "low_delay",
+        *src,
+        "-an", "-f", "rawvideo", "-pix_fmt", "yuyv422", "-",
+    ]
+
+
 class Capture(threading.Thread):
     """Reads packed YUY2 frames from ffmpeg and publishes the latest 16-bit frame."""
 
@@ -465,14 +606,7 @@ class Capture(threading.Thread):
         self._proc: subprocess.Popen | None = None
 
     def run(self) -> None:
-        args = [
-            self.ffmpeg, "-hide_banner", "-loglevel", "error",
-            "-fflags", "nobuffer", "-flags", "low_delay",
-            "-f", "dshow", "-rtbufsize", "256M",
-            "-video_size", f"{STREAM_W}x{STREAM_H}", "-framerate", "25",
-            "-i", f"video={self.device}",
-            "-an", "-f", "rawvideo", "-pix_fmt", "yuyv422", "-",
-        ]
+        args = build_capture_args(self.ffmpeg, self.device)
         try:
             self._proc = subprocess.Popen(
                 args,
@@ -521,7 +655,10 @@ class Capture(threading.Thread):
                 err = (self._proc.stderr.read() or b"").decode("utf-8", "replace").strip()
             except Exception:
                 pass
-            self.on_error("Kamera akışı durdu" + (f": {err.splitlines()[-1]}" if err else "."))
+            msg = "Kamera akışı durdu" + (f": {err.splitlines()[-1]}" if err else ".")
+            if not IS_WIN and "ermission denied" in err:
+                msg += "\nKullanıcıyı 'video' grubuna ekleyin: sudo usermod -aG video $USER (sonra oturumu yeniden açın)"
+            self.on_error(msg)
 
     def snapshot(self) -> np.ndarray | None:
         with self.lock:
@@ -535,6 +672,113 @@ class Capture(threading.Thread):
                 proc.kill()
             except Exception:
                 pass
+
+
+def has_encoder(ffmpeg: str, name: str) -> bool:
+    try:
+        res = subprocess.run([ffmpeg, "-hide_banner", "-encoders"], capture_output=True, text=True,
+                             timeout=10, errors="replace", creationflags=_no_window_flags())
+        return name in (res.stdout or "")
+    except Exception:
+        return False
+
+
+class Recorder:
+    """Renkli termal kareleri ffmpeg'e yollayıp mp4 yazar.
+
+    Yazma ayrı bir iş parçacığında yapılır; kodlayıcı yavaşlarsa arayüz donmaz,
+    kuyruk dolunca kare atlanır. Zaman damgası duvar saatinden alınır, yani video
+    gerçek hızda oynar."""
+
+    def __init__(self, ffmpeg: str, path: Path, width: int, height: int,
+                 fps: int = 25, zoom: int = ZOOM) -> None:
+        self.ffmpeg = ffmpeg
+        self.path = Path(path)
+        self.width, self.height = width, height
+        self.fps, self.zoom = fps, zoom
+        self.frames = 0
+        self.dropped = 0
+        self.failed = False
+        self._q: queue.Queue = queue.Queue(maxsize=120)
+        self._proc: subprocess.Popen | None = None
+        self._thread: threading.Thread | None = None
+        self._err = tempfile.TemporaryFile()
+
+    def start(self) -> None:
+        if has_encoder(self.ffmpeg, "libx264"):
+            enc = ["-c:v", "libx264", "-preset", "veryfast", "-crf", "18"]
+        else:
+            enc = ["-c:v", "mpeg4", "-q:v", "3"]
+        w, h = self.width, self.height
+        args = [
+            self.ffmpeg, "-hide_banner", "-loglevel", "error", "-y",
+            "-use_wallclock_as_timestamps", "1",
+            "-f", "rawvideo", "-pix_fmt", "rgb24", "-s", f"{w}x{h}", "-i", "-",
+            "-vf", f"scale={w * self.zoom}:{h * self.zoom}:flags=bicubic,fps={self.fps}",
+            *enc, "-pix_fmt", "yuv420p", "-movflags", "+faststart",
+            str(self.path),
+        ]
+        self._proc = subprocess.Popen(args, stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                      stderr=self._err, creationflags=_no_window_flags())
+        self._thread = threading.Thread(target=self._pump, daemon=True)
+        self._thread.start()
+
+    def _pump(self) -> None:
+        assert self._proc is not None and self._proc.stdin is not None
+        while True:
+            item = self._q.get()
+            if item is None:
+                break
+            try:
+                self._proc.stdin.write(item)
+            except (BrokenPipeError, OSError, ValueError):
+                self.failed = True
+                break
+        try:
+            self._proc.stdin.close()
+        except Exception:
+            pass
+
+    def push(self, rgb: np.ndarray) -> None:
+        if self.failed:
+            return
+        try:
+            self._q.put_nowait(np.ascontiguousarray(rgb, dtype=np.uint8).tobytes())
+            self.frames += 1
+        except queue.Full:
+            self.dropped += 1
+
+    def stop(self) -> tuple[bool, str]:
+        """(başarılı mı, hata metni)"""
+        proc = self._proc
+        if proc is None:
+            return False, "başlatılmadı"
+        try:
+            self._q.put(None, timeout=3)
+        except queue.Full:
+            self.failed = True
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        if self._thread:
+            self._thread.join(timeout=20)
+        try:
+            code = proc.wait(timeout=20)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            code = -1
+        err = ""
+        try:
+            self._err.seek(0)
+            err = self._err.read().decode("utf-8", "replace").strip()
+            self._err.close()
+        except Exception:
+            pass
+        ok = code == 0 and not self.failed and self.path.exists() and self.frames > 0
+        if not ok and not err:
+            err = "ffmpeg kodlamayı tamamlayamadı" if self.frames else "hiç kare yazılmadı"
+        return ok, (err.splitlines()[-1] if err else "")
 
 
 # ----------------------------------------------------------------------------
@@ -804,6 +1048,13 @@ class ThermalView(QWidget):
         self._lut: np.ndarray | None = None
         self._span: tuple[float, float] = (15.0, 40.0)
         self._clean = False
+        self._rec_text = ""
+        self._rec_blink = True
+
+    def set_rec_text(self, text: str, blink_on: bool = True) -> None:
+        if text != self._rec_text or blink_on != self._rec_blink:
+            self._rec_text, self._rec_blink = text, blink_on
+            self.update()
 
     def set_scale(self, lut: np.ndarray, lo: float, hi: float) -> None:
         """Görüntünün sağ kenarına çizilen renk çubuğu için palet + sıcaklık aralığı."""
@@ -913,7 +1164,7 @@ class ThermalView(QWidget):
                 painter.drawRect(QRect(x, top, bar_w, bottom - top))
 
                 lo, hi = self._span
-                painter.setFont(QFont("Segoe UI", 8))
+                painter.setFont(QFont(UI_FONT, 8))
                 painter.setPen(QColor(245, 245, 245))
                 for label, y in (
                     (f"{hi:.0f} °C", top - 4),
@@ -933,7 +1184,7 @@ class ThermalView(QWidget):
             painter.drawEllipse(QPoint(int(cx), int(cy)), 4, 4)
 
             if self._spot_text:
-                font = QFont("Segoe UI", 11, QFont.Bold)
+                font = QFont(UI_FONT, 11, QFont.Bold)
                 painter.setFont(font)
                 metrics = painter.fontMetrics()
                 tw = metrics.horizontalAdvance(self._spot_text) + 12
@@ -944,13 +1195,28 @@ class ThermalView(QWidget):
                 painter.drawText(QRect(bx + 6, by + 3, tw, th), Qt.AlignLeft | Qt.AlignVCenter, self._spot_text)
 
         if self._mode_text and not self._clean:
-            painter.setFont(QFont("Segoe UI", 9))
+            painter.setFont(QFont(UI_FONT, 9))
             metrics = painter.fontMetrics()
             tw = metrics.horizontalAdvance(self._mode_text) + 10
             th = metrics.height() + 4
             painter.fillRect(QRect(8, self.height() - th - 10, tw, th), QColor(0, 0, 0, 150))
             painter.setPen(QColor(210, 210, 210))
             painter.drawText(QRect(13, self.height() - th - 10, tw, th), Qt.AlignLeft | Qt.AlignVCenter, self._mode_text)
+
+        if self._rec_text:
+            painter.setFont(QFont(UI_FONT, 10, QFont.Bold))
+            m = painter.fontMetrics()
+            label = "REC  " + self._rec_text
+            tw = m.horizontalAdvance(label) + 32
+            th = m.height() + 8
+            x0, y0 = rect.x() + 10, rect.y() + 10
+            painter.fillRect(QRect(x0, y0, tw, th), QColor(0, 0, 0, 150))
+            if self._rec_blink:
+                painter.setBrush(QColor(230, 40, 40))
+                painter.setPen(Qt.NoPen)
+                painter.drawEllipse(QPoint(x0 + 13, y0 + th // 2), 6, 6)
+            painter.setPen(QColor(255, 255, 255))
+            painter.drawText(QRect(x0 + 26, y0, tw - 26, th), Qt.AlignLeft | Qt.AlignVCenter, label)
 
         # --- sekme her zaman üstte olsun ---
         for child in self.findChildren(PanelHandle):
@@ -972,7 +1238,7 @@ class CalibrationDialog(QDialog):
         self.points: list[tuple[float, float]] = []
 
         self.live = QLabel("—")
-        self.live.setFont(QFont("Segoe UI", 13, QFont.Bold))
+        self.live.setFont(QFont(UI_FONT, 13, QFont.Bold))
         self.temp = QDoubleSpinBox()
         self.temp.setRange(-40, 600)
         self.temp.setDecimals(1)
@@ -1094,7 +1360,7 @@ class AboutDialog(QDialog):
             f"<div style='font-size:18px;font-weight:700;color:#ffffff'>ThermalScope "
             f"<span style='font-size:12px;color:#8f8f8f'>v{APP_VERSION}</span></div>"
             "<div style='color:#b9b9b9'>UNI-T / Guide UVC termal kamera görüntüleyici</div>"
-            "<div style='color:#8f8f8f;font-size:11px'>Windows · Python + PySide6 · ffmpeg/DirectShow</div>"
+            "<div style='color:#8f8f8f;font-size:11px'>Windows / Linux · Python + PySide6 · ffmpeg (DirectShow / V4L2)</div>"
         )
         header.addWidget(logo)
         header.addSpacing(8)
@@ -1173,6 +1439,11 @@ class MainWindow(QMainWindow):
         self._target_view_w: int | None = None
         self._clean_anchor: QPoint | None = None
         self._step_btns: list[QPushButton] = []
+        self._recorder: Recorder | None = None
+        self._rec_start = 0.0
+        self._rec_shape: tuple[int, int] | None = None
+        self._notice = ""
+        self._notice_until = 0.0
         self._density = -1
         self._density_need: list[int] | None = None
         self._saved_window_pos: QPoint | None = None
@@ -1192,8 +1463,8 @@ class MainWindow(QMainWindow):
         self.refresh_devices()
         if self.ffmpeg is None:
             QMessageBox.warning(self, "ffmpeg bulunamadı",
-                                "Görüntü DirectShow üzerinden ffmpeg ile alınır.\n"
-                                "ffmpeg kurun (winget install Gyan.FFmpeg) veya ayarlarda yolunu belirtin.")
+                                ("Görüntü DirectShow" if IS_WIN else "Görüntü V4L2")
+                                + " üzerinden ffmpeg ile alınır.\n" + ffmpeg_missing_hint())
         elif self.device_combo.count() > 0:
             self.start_capture()
         else:
@@ -1457,7 +1728,7 @@ class MainWindow(QMainWindow):
         self.on_agc()
 
         self.spot_label = QLabel("--.- °C")
-        self.spot_label.setFont(QFont("Segoe UI", 21, QFont.Bold))
+        self.spot_label.setFont(QFont(UI_FONT, 21, QFont.Bold))
         self.spot_label.setStyleSheet("color:#ffffff;")
         self.spot_label.setFixedHeight(30)
         panel.addWidget(self.spot_label)
@@ -1476,6 +1747,9 @@ class MainWindow(QMainWindow):
         calib.clicked.connect(self.open_calibration)
         shot = QPushButton("Fotoğraf (S)")
         shot.clicked.connect(self.save_snapshot)
+        self.rec_btn = QPushButton("● Video kaydı (K)")
+        self.rec_btn.setToolTip("Renkli termal görüntüyü mp4 olarak kaydet (K)")
+        self.rec_btn.clicked.connect(self.toggle_recording)
         self.nuc_btn = QPushButton("NUC al")
         self.nuc_btn.setToolTip("Lensi kapatıp sabit desen düzeltmesi al (gölgelenmeyi siler)")
         self.nuc_btn.clicked.connect(self.acquire_nuc)
@@ -1486,6 +1760,7 @@ class MainWindow(QMainWindow):
         btn_grid.addWidget(shot, 0, 1)
         btn_grid.addWidget(self.nuc_btn, 1, 0)
         btn_grid.addWidget(self.nuc_clear_btn, 1, 1)
+        btn_grid.addWidget(self.rec_btn, 2, 0, 1, 2)
         panel.addLayout(btn_grid)
 
         self._update_nuc_label()
@@ -1749,7 +2024,7 @@ class MainWindow(QMainWindow):
             sp.setMinimumHeight((30, 26, 24)[lvl])
         self.span_hint.setVisible(lvl < 2)
         self.spot_label.setFixedHeight((30, 28, 24)[lvl])
-        self.spot_label.setFont(QFont("Segoe UI", (21, 19, 16)[lvl], QFont.Bold))
+        self.spot_label.setFont(QFont(UI_FONT, (21, 19, 16)[lvl], QFont.Bold))
         self.stats_label.setStyleSheet(f"color:#c8c8c8;font-size:{(11, 11, 10)[lvl]}px;")
         self.stats_label.setFixedHeight((32, 32, 28)[lvl])
         self.status.setFixedHeight((44, 34, 30)[lvl])
@@ -1820,11 +2095,12 @@ class MainWindow(QMainWindow):
         self.status.setText("Başlatılıyor…")
 
     def stop_capture(self) -> None:
+        rec_msg = self.stop_recording()
         if self.capture:
             self.capture.stop()
             self.capture = None
         self.start_btn.setText("Başlat")
-        self.status.setText("Durduruldu.")
+        self.status.setText("Durduruldu." + (f"\n{rec_msg}" if rec_msg else ""))
         self.view.clear()
 
     def on_capture_error(self, message: str) -> None:
@@ -1836,6 +2112,8 @@ class MainWindow(QMainWindow):
         self._ema = None
 
     def on_tick(self) -> None:
+        if self._recorder and (not self.capture or not self.capture.is_alive()):
+            self.stop_recording()
         if not self.capture:
             return
         raw = self.capture.snapshot()
@@ -1886,6 +2164,7 @@ class MainWindow(QMainWindow):
         if self.shading_check.isChecked():
             idx = fix_shading(idx)
         rgb = self.palette.lut[idx]
+        self._rec_push(rgb)
 
         height, width = disp.shape
         spot_text = ""
@@ -1920,6 +2199,9 @@ class MainWindow(QMainWindow):
         )
 
         fps = getattr(self.capture, "fps", 0.0) if self.capture else 0.0
+        if time.time() < self._notice_until:
+            self.status.setText(self._notice)
+            return
         self.status.setText(
             f"{width}x{height} · {fps:.0f} fps · veri 16-bit, palet 24-bit\n"
             f"T(°C) = {self.settings.scale:.8f} × raw + {self.settings.offset:.4f}"
@@ -1943,6 +2225,8 @@ class MainWindow(QMainWindow):
         self._ema = None
 
     def cycle_rotation(self) -> None:
+        if self._recorder:
+            return
         index = (self.rot_combo.currentIndex() + 1) % 4
         self.rot_combo.setCurrentIndex(index)
 
@@ -2095,6 +2379,80 @@ class MainWindow(QMainWindow):
             self.settings.save()
             self.agc.reset()
 
+    # -- video kaydı ----------------------------------------------------
+    def _flash(self, message: str, seconds: float = 6.0) -> None:
+        """Durum satırında mesajı birkaç saniye sabit tutar (her karede ezilmesin)."""
+        self._notice = message
+        self._notice_until = time.time() + seconds
+        self.status.setText(message)
+
+    def toggle_recording(self) -> None:
+        if self._recorder:
+            self.stop_recording()
+        else:
+            self.start_recording()
+
+    def start_recording(self) -> None:
+        if (self.ffmpeg is None or not self.capture or not self.capture.is_alive()
+                or self.last_temps is None):
+            self._flash("Video kaydı için önce kamerayı başlatın.")
+            return
+        height, width = self.last_temps.shape
+        out_dir = user_dir("VIDEOS", "Videos") / "ThermalScope"
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+            rec = Recorder(self.ffmpeg, out_dir / f"thermal_{datetime.now():%Y%m%d_%H%M%S}.mp4",
+                           width, height)
+            rec.start()
+        except Exception as exc:
+            self._flash(f"Kayıt başlatılamadı: {exc}")
+            return
+        self._recorder = rec
+        self._rec_start = time.time()
+        self._rec_shape = (height, width)
+        self.rec_btn.setText("■ Kaydı durdur (K)")
+        self.rec_btn.setStyleSheet("QPushButton{background:#a8231c;border-color:#d9534f;color:#ffffff;}"
+                                   "QPushButton:hover{background:#c0302a;}")
+        for w in (self.rot_combo, self.mirror_h_btn, self.mirror_v_btn):
+            w.setEnabled(False)       # kayıt sırasında kare boyutu değişmesin
+        self.view.set_rec_text("00:00", True)
+
+    def stop_recording(self) -> str:
+        rec = self._recorder
+        if rec is None:
+            return ""
+        self._recorder = None
+        self.view.set_rec_text("")
+        self.rec_btn.setText("● Video kaydı (K)")
+        self.rec_btn.setStyleSheet("")
+        for w in (self.rot_combo, self.mirror_h_btn, self.mirror_v_btn):
+            w.setEnabled(True)
+        seconds = time.time() - self._rec_start
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            ok, err = rec.stop()          # kodlayıcının son kareleri yazmasını bekler
+        finally:
+            QApplication.restoreOverrideCursor()
+        if ok:
+            msg = f"Video kaydedildi ({seconds:.0f} sn):\n{rec.path}"
+            if rec.dropped:
+                msg += f"\n({rec.dropped} kare atlandı)"
+        else:
+            msg = f"Video kaydı başarısız: {err}"
+        self._flash(msg, 10.0)
+        return msg
+
+    def _rec_push(self, rgb: np.ndarray) -> None:
+        rec = self._recorder
+        if rec is None:
+            return
+        if rgb.shape[:2] == self._rec_shape:
+            rec.push(rgb)
+        t = time.time() - self._rec_start
+        self.view.set_rec_text(f"{int(t) // 60:02d}:{int(t) % 60:02d}", int(t * 2) % 2 == 0)
+        if rec.failed:
+            self.stop_recording()
+
     def save_snapshot(self) -> None:
         if self.last_temps is None:
             return
@@ -2105,14 +2463,14 @@ class MainWindow(QMainWindow):
             idx = fix_shading(idx)
         rgb = np.repeat(np.repeat(self.palette.lut[idx], ZOOM, axis=0), ZOOM, axis=1)
 
-        out_dir = Path.home() / "Pictures" / "ThermalScope"
+        out_dir = user_dir("PICTURES", "Pictures") / "ThermalScope"
         out_dir.mkdir(parents=True, exist_ok=True)
         path = out_dir / f"thermal_{datetime.now():%Y%m%d_%H%M%S}.png"
 
         h, w, _ = rgb.shape
         image = QImage(np.ascontiguousarray(rgb).data, w, h, 3 * w, QImage.Format_RGB888).copy()
         image.save(str(path))
-        self.status.setText(f"Kaydedildi:\n{path}")
+        self._flash(f"Kaydedildi:\n{path}")
 
     def keyPressEvent(self, event) -> None:  # noqa: N802
         key = event.key()
@@ -2121,11 +2479,15 @@ class MainWindow(QMainWindow):
         elif key == Qt.Key_R:
             self.cycle_rotation()
         elif key == Qt.Key_H:
-            self.mirror_h_btn.toggle()
-            self.on_orientation_toggle()
+            if not self._recorder:
+                self.mirror_h_btn.toggle()
+                self.on_orientation_toggle()
         elif key == Qt.Key_V:
-            self.mirror_v_btn.toggle()
-            self.on_orientation_toggle()
+            if not self._recorder:
+                self.mirror_v_btn.toggle()
+                self.on_orientation_toggle()
+        elif key == Qt.Key_K:
+            self.toggle_recording()
         elif key == Qt.Key_P:
             self.toggle_panel()
         elif key in (Qt.Key_Plus, Qt.Key_Equal):
@@ -2149,8 +2511,16 @@ class MainWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName(APP_NAME)
+    if not IS_WIN:
+        app.setDesktopFileName("thermalscope")     # Wayland/GNOME'da ikon ve görev çubuğu eşleşmesi
     app.setWindowIcon(app_icon())
-    materialize_icon_file()          # kısayol ikonu için %APPDATA% altına kopyala
+    materialize_icon_file()          # kısayol ikonu için ayar klasörüne kopyala
+    if "--install-desktop" in sys.argv:
+        if IS_WIN:
+            print("--install-desktop yalnızca Linux içindir.")
+            return 1
+        print(f"Uygulama menüsü girdisi oluşturuldu: {install_desktop_entry()}")
+        return 0
     win = MainWindow()
     win.show()
 

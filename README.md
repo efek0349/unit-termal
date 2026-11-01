@@ -11,7 +11,7 @@ root@thermal:~# ./thermalscope --target=uni-t --mode=radiometric
 [+] payload captured // 65536 levels // no driver surgery required
 ```
 
-**ThermalScope**, UNI-T / Guide UVC termal modüllerini Windows'ta *gerçek* hâline
+**ThermalScope**, UNI-T / Guide UVC termal modüllerini Windows ve Linux da *gerçek* hâline
 döndüren tek dosyalık bir görüntüleyicidir. Kamera uygulamasının gördüğü şey
 sadece 8-bit gri bir video akışıdır; **gerçek veri** akışın içine gömülmüştür.
 Biz onu çıkarıyoruz.
@@ -25,13 +25,12 @@ Biz onu çıkarıyoruz.
 
 ```
  device ....... VID_0BDA:PID_5830  "USB Camera"
- uvc modes .... YUY2 256x192@25     <- windows kamera uygulaması bunu görür
+ uvc modes .... YUY2 256x192@25     <- kamera uygulaması bunu görür
                 YUY2 256x384@25     <- gerçek veri burada
  payload ...... 16-bit radiometric, iki 8-bit düzlem hâlinde paketlenmiş
  decode ....... raw = (üst_yaka << 8) | alt_yaka
 ```
 
-Windows Kamera uygulaması 256×192 modunu açar ve yalnızca gri görüntüyü gösterir.
 Cihaz 256×384 modunda 16-bit radyometrik kareyi YUY2 karesinin içine *planar*
 olarak gömer. Bu depodaki kod o paketi söker, temizler, renklendirir ve
 santigrat dereceye çevirir.
@@ -50,10 +49,10 @@ santigrat dereceye çevirir.
 ## `[01]` REQUIREMENTS // ÖN KOŞULLAR
 
 ```
-[ ok ] Windows 10/11 x64
+[ ok ] Windows/Linux
 [ ok ] Python 3.10+          python --version
 [ ok ] PySide6 + numpy       python -m pip install PySide6 numpy
-[ ok ] ffmpeg (DirectShow)   winget install Gyan.FFmpeg
+[ ok ] ffmpeg (DirectShow)   winget install Gyan.FFmpeg(Windows-11)
 ```
 
 Kurulum yok, servis yok, registry yok. Klasörü kopyala, çalıştır, sil.
@@ -65,6 +64,7 @@ Kurulum yok, servis yok, registry yok. Klasörü kopyala, çalıştır, sil.
 ```
   cd ThermalScope
   python ThermalScope.py  :: geliştirici modu
+  python ThermalScope.py --install-desktop :: Linux Uygulama menüsüne ekleme
 ```
 
 Açılışta cihaz kendiliğinden bulunur; bulunamazsa 4 kez daha dener
@@ -117,7 +117,8 @@ T(°C) = a * raw + b        default: a = 1/1024 , b = 2.359375
 ```
 
 İki nokta arasındaki fark ne kadar büyükse fit o kadar iyi oturur.
-Ayar `%APPDATA%\ThermalScope\settings.json` içinde kalır.
+Windows da Ayar `%APPDATA%\ThermalScope\settings.json` içinde kalır.
+Linux da Ayar `$XDG_CONFIG_HOME/ThermalScope/settings.json` içinde kalır.
 
 ---
 
@@ -159,12 +160,12 @@ Ayar `%APPDATA%\ThermalScope\settings.json` içinde kalır.
 ## `[08]` OPERATOR // İMZA
 
 ```
- operator .... efek  //  @efek0349
+ operator .... efek0349  //  @efek0349
  github ...... https://github.com/efek0349
  telegram .... https://t.me/efek0349
  gpg ......... 0x2BE4D2A863E2EAB4
  license ..... MIT
- build ....... ThermalScope v1.0.0  ·  Python + PySide6 + ffmpeg
+ build ....... ThermalScope v1.0.4  ·  Python + PySide6 + ffmpeg
 ```
 
 ---

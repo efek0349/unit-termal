@@ -1,0 +1,13 @@
+# ThermalScope - Python bağımlılıkları
+# Python 3.10 veya üstü gerekir.
+#
+# Kurulum:   pip install -r requirements.txt
+#
+# Harici program (pip ile kurulmaz): ffmpeg
+#   Windows : winget install Gyan.FFmpeg
+#   Debian/Ubuntu : sudo apt install ffmpeg libxcb-cursor0
+#   Fedora  : sudo dnf install ffmpeg
+#   Arch    : sudo pacman -S ffmpeg
+
+PySide6>=6.5
+numpy>=1.23
