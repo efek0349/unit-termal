@@ -48,8 +48,8 @@ from PySide6.QtWidgets import (
 )
 
 APP_NAME = "ThermalScope"
-APP_VERSION = "1.0.2"
-APP_AUTHOR = "efek"
+APP_VERSION = "1.0.3"
+APP_AUTHOR = "efek0349"
 GITHUB_URL = "https://github.com/efek0349"
 TELEGRAM_URL = "https://t.me/efek0349"
 GPG_KEY = "0x2BE4D2A863E2EAB4"
@@ -62,8 +62,162 @@ WM_SIZING = 0x0214
 
 # Ozel ikon kullanmak isterseniz buraya base64 PNG yapistirin.
 # Bos birakilirsa ikon kodla cizilir (Iron paleti + nisangah).
-ICON_PNG_B64 = ""
-
+ICON_PNG_B64 = (
+    "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"
+    "/z+MWmbwYYGYZQAAAABJRU5ErkJggg=="
+)
 
 def make_icon_pixmap(size: int = 256) -> QPixmap:
     if ICON_PNG_B64:
@@ -662,7 +816,7 @@ class ThermalView(QWidget):
         if clean:
             self.setMinimumSize(160, 120)
         else:
-            self.setMinimumSize(400, 300)
+            self.setMinimumSize(320, 240)
         self.update()
 
     def source_size(self) -> tuple[int, int]:
@@ -1018,6 +1172,9 @@ class MainWindow(QMainWindow):
         self._fit_anchor = "width"
         self._target_view_w: int | None = None
         self._clean_anchor: QPoint | None = None
+        self._step_btns: list[QPushButton] = []
+        self._density = -1
+        self._density_need: list[int] | None = None
         self._saved_window_pos: QPoint | None = None
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
@@ -1079,6 +1236,7 @@ class MainWindow(QMainWindow):
         btn.setToolTip("0.5 °C azalt" if direction < 0 else "0.5 °C artır")
         btn.setStyleSheet("QPushButton{font-size:19px;font-weight:800;color:#ffffff;background:#3a3a48;border:1px solid #5a5a70;border-radius:4px;padding:0;} QPushButton:hover{background:#4c4c60;border-color:#7f8cff;} QPushButton:pressed{background:#2b2b35;}")
         btn.clicked.connect(lambda: self._bump(spin, direction))
+        self._step_btns.append(btn)
         return btn
 
     def _bump(self, spin: QDoubleSpinBox, direction: int) -> None:
@@ -1111,7 +1269,7 @@ class MainWindow(QMainWindow):
 
         right = QWidget()
         right.setFixedWidth(320)
-        right.setStyleSheet("""
+        self._panel_css = ("""
             QWidget { background:#202027; color:#e8e8e8; }
             QLabel { color:#d6d6d6; }
             QComboBox, QDoubleSpinBox {
@@ -1149,7 +1307,10 @@ class MainWindow(QMainWindow):
                 border-radius:6px;
             }
         """)
+        right.setStyleSheet(self._panel_css)
+        self._right = right
         panel = QVBoxLayout(right)
+        self._panel = panel
         panel.setContentsMargins(10, 10, 10, 8)
         panel.setSpacing(5)
 
@@ -1163,6 +1324,7 @@ class MainWindow(QMainWindow):
         refresh.setFixedSize(30, 26)
         refresh.setToolTip("Cihazları yenile")
         refresh.clicked.connect(self.refresh_devices)
+        self.refresh_btn = refresh
         self.start_btn = QPushButton("Başlat")
         self.start_btn.setFixedSize(78, 26)
         self.start_btn.clicked.connect(self.toggle_capture)
@@ -1290,6 +1452,7 @@ class MainWindow(QMainWindow):
         self.span_hint = QLabel("")
         self.span_hint.setStyleSheet("color:#9a9a9a;font-size:10px;")
         self.span_hint.setWordWrap(True)
+        self.span_hint.setFixedHeight(26)
         panel.addWidget(self.span_hint)
         self.on_agc()
 
@@ -1330,6 +1493,7 @@ class MainWindow(QMainWindow):
         self.status = QLabel("Hazır")
         self.status.setWordWrap(True)
         self.status.setStyleSheet("color:#8f8f8f;font-size:11px;")
+        self.status.setFixedHeight(44)
         panel.addWidget(self.status)
         panel.addStretch(1)   # içerik üstte toplansın, arada boşluk oluşmasın
 
@@ -1386,6 +1550,7 @@ class MainWindow(QMainWindow):
         root.addWidget(self.footer)
 
         self.setCentralWidget(central)
+        self._measure_density()
 
     # -- panel gizle/göster --------------------------------------------
     def _show_hover_tab(self) -> None:
@@ -1548,6 +1713,7 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         if self._panel_visible:
             self._saved_window_size = self.size()
+            self._update_density(event.size().height())
         elif os.name != "nt":
             # Windows dışında sürükleme sonrası oranı düzelt
             old = event.oldSize()
@@ -1556,6 +1722,66 @@ class MainWindow(QMainWindow):
                 dh = abs(self.height() - old.height())
                 self._fit_anchor = "width" if dw >= dh else "height"
             self._fit_timer.start(40)
+
+    # -- ayarlar panelini pencere yüksekliğine uydurma -------------------
+    def _set_density(self, lvl: int, force: bool = False) -> None:
+        """0 = rahat, 1 = sıkı, 2 = çok sıkı. Panel kaydırma çubuğu gerektirmez."""
+        if lvl == self._density and not force:
+            return
+        self._density = lvl
+        self._panel.setSpacing((5, 4, 3)[lvl])
+        self._panel.setContentsMargins(*((10, 10, 10, 8), (10, 7, 10, 6), (10, 5, 10, 4))[lvl])
+        extra = (
+            "",
+            "QPushButton{padding:3px 10px;min-height:18px;}"
+            "QComboBox,QDoubleSpinBox{padding:1px 6px;min-height:18px;}",
+            "QPushButton{padding:2px 8px;min-height:16px;}"
+            "QComboBox,QDoubleSpinBox{padding:0px 6px;min-height:16px;}",
+        )[lvl]
+        self._right.setStyleSheet(self._panel_css + extra)
+
+        small = (26, 24, 22)[lvl]
+        for b in (self.refresh_btn, self.start_btn, self.mirror_h_btn, self.mirror_v_btn):
+            b.setFixedHeight(small)
+        for b in self._step_btns:
+            b.setFixedHeight((32, 28, 24)[lvl])
+        for sp in (self.min_spin, self.max_spin):
+            sp.setMinimumHeight((30, 26, 24)[lvl])
+        self.span_hint.setVisible(lvl < 2)
+        self.spot_label.setFixedHeight((30, 28, 24)[lvl])
+        self.spot_label.setFont(QFont("Segoe UI", (21, 19, 16)[lvl], QFont.Bold))
+        self.stats_label.setStyleSheet(f"color:#c8c8c8;font-size:{(11, 11, 10)[lvl]}px;")
+        self.stats_label.setFixedHeight((32, 32, 28)[lvl])
+        self.status.setFixedHeight((44, 34, 30)[lvl])
+
+    def _measure_density(self) -> None:
+        """Her seviyenin gereken yüksekliğini ölçer; pencerenin alt sınırını panele göre koyar."""
+        lay = self._panel
+        need: list[int] = []
+        min_needed = 0
+        for lvl in (0, 1, 2):
+            self._set_density(lvl, force=True)
+            for w in [self._right] + self._right.findChildren(QWidget):
+                w.ensurePolished()
+            lay.invalidate()
+            need.append(lay.sizeHint().height())
+            if lvl == 2:
+                min_needed = lay.minimumSize().height()
+        self._density_need = need
+        self.panel_scroll.setMinimumHeight(min_needed + 2)
+        self._density = -1
+        self._update_density(self.height())
+
+    def _update_density(self, height: int) -> None:
+        if not self._density_need or not self._panel_visible:
+            return
+        avail = height - self.footer.sizeHint().height()
+        lvl = 2
+        for i, n in enumerate(self._density_need):
+            if n <= avail:
+                lvl = i
+                break
+        self._set_density(lvl)
 
     # -- capture --------------------------------------------------------
     def refresh_devices(self) -> None:
