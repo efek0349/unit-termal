@@ -16,7 +16,7 @@ döndüren tek dosyalık bir görüntüleyicidir. Kamera uygulamasının gördü
 sadece 8-bit gri bir video akışıdır; **gerçek veri** akışın içine gömülmüştür.
 Biz onu çıkarıyoruz.
 
-<img src="screenshots/screenshot.png" width="30%"><img src="screenshots/about.png" width="30%">
+<img src="screenshots/screenshot.png" width="30%"><img src="screenshots/about.png" width="30%"><img src="screenshots/unit-thermal-obsd.png" width="30%">
 
 
 ---
@@ -49,7 +49,7 @@ santigrat dereceye çevirir.
 ## `[01]` REQUIREMENTS // ÖN KOŞULLAR
 
 ```
-[ ok ] Windows/Linux
+[ ok ] Windows/Linux/OpenBSD
 [ ok ] Python 3.10+          python --version
 [ ok ] PySide6 + numpy       python -m pip install PySide6 numpy
 [ ok ] ffmpeg (DirectShow)   winget install Gyan.FFmpeg(Windows-11)
